@@ -1,20 +1,17 @@
 import { fallback } from 'viem'
 import { createConfig, http, injected } from 'wagmi'
-import { bsc } from 'wagmi/chains'
-
-const primary = process.env.NEXT_PUBLIC_BSC_RPC_URL || 'https://bsc-dataseed.binance.org'
-const secondary = process.env.NEXT_PUBLIC_BSC_RPC_FALLBACK || 'https://bsc-rpc.publicnode.com'
+import { BSC_RPC_URLS, bscMainnet } from '@/lib/config'
 
 export const wagmiConfig = createConfig({
-  chains: [bsc],
+  chains: [bscMainnet],
   connectors: [injected({ shimDisconnect: true })],
   multiInjectedProviderDiscovery: false,
   ssr: true,
   transports: {
-    [bsc.id]: fallback([
-      http(primary, { timeout: 20_000, retryCount: 1 }),
-      http(secondary, { timeout: 20_000, retryCount: 1 }),
-    ]),
+    [bscMainnet.id]: fallback(
+      BSC_RPC_URLS.map((url) => http(url, { timeout: 15_000, retryCount: 1 })),
+      { rank: false, retryCount: 2 },
+    ),
   },
 })
 
