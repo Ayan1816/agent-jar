@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useSwitchChain, useWriteContract } from 'wagmi'
@@ -8,15 +9,22 @@ import { BawPanel } from '@/components/BawPanel'
 import { useMounted, useMyHandle } from '@/components/useSession'
 import { agentJarAbi } from '@/lib/abi'
 import { claimSteps } from '@/lib/baw'
-import { agentJarAddress, CHAIN_ID } from '@/lib/config'
+import { AGENTJAR_ADDRESS, CHAIN_ID } from '@/lib/config'
 import { friendlyError } from '@/lib/errors'
 import { countLabel, formatUnitsTrim, supportLine } from '@/lib/format'
 import { displayHandle, normalizeHandle } from '@/lib/handles'
-import { loadAgent, loadTipIndex, type AgentProfile } from '@/lib/reads'
-import { payUrl } from '@/lib/route'
+import { loadAgent, type AgentProfile } from '@/lib/reads'
+import { payUrl, profileUrl } from '@/lib/route'
+import type { PublicLeaderboardPayload } from '@/lib/serverClient'
 import { badgeTweet, tweetHref } from '@/lib/share'
 import { progressFor, tierStyle } from '@/lib/tiers'
 import { wagmiConfig } from '@/lib/wagmi'
+
+async function fetchLeaderboardApi(): Promise<PublicLeaderboardPayload> {
+  const res = await fetch('/api/agents/leaderboard?limit=50')
+  if (!res.ok) throw new Error('Leaderboard API error')
+  return (await res.json()) as PublicLeaderboardPayload
+}
 
 export function BadgeTab({ active }: { active: boolean }) {
   const mounted = useMounted()
@@ -39,10 +47,10 @@ export function BadgeTab({ active }: { active: boolean }) {
     queryFn: () => loadAgent(lookup),
   })
   const boardQuery = useQuery({
-    queryKey: ['tip-index'],
-    enabled: mounted && active && Boolean(agentJarAddress),
-    queryFn: loadTipIndex,
-    staleTime: 30_000,
+    queryKey: ['leaderboard-api'],
+    enabled: mounted && active,
+    queryFn: fetchLeaderboardApi,
+    staleTime: 15_000,
   })
 
   useEffect(() => {
@@ -94,8 +102,7 @@ export function BadgeTab({ active }: { active: boolean }) {
   }
 
   const canClaim = Boolean(
-    agentJarAddress &&
-      profile?.statsReady &&
+    profile?.statsReady &&
       mineProfile &&
       mine.isHolder &&
       profile.score !== null &&
@@ -104,7 +111,7 @@ export function BadgeTab({ active }: { active: boolean }) {
   )
 
   async function onClaim() {
-    if (lock.current || !agentJarAddress || !canClaim || !profile) return
+    if (lock.current || !canClaim || !profile) return
     lock.current = true
     setError(null)
     setStatus(null)
@@ -113,17 +120,18 @@ export function BadgeTab({ active }: { active: boolean }) {
         setStatus('Confirm the network switch in your wallet.')
         await switchChainAsync({ chainId: CHAIN_ID })
       }
-      setStatus('Confirm the badge claim in your wallet.')
+      setStatus('Confirm the soulbound passport claim in your wallet.')
       const hash = await writeContractAsync({
         chainId: CHAIN_ID,
-        address: agentJarAddress,
+        address: AGENTJAR_ADDRESS,
         abi: agentJarAbi,
         functionName: 'claimBadge',
         args: [],
       })
       await waitForTransactionReceipt(wagmiConfig, { hash, chainId: CHAIN_ID })
-      setStatus('Badge claimed.')
+      setStatus('Soulbound Agent Reputation Passport minted.')
       await queryClient.invalidateQueries({ queryKey: ['agent', profile.handle] })
+      await queryClient.invalidateQueries({ queryKey: ['leaderboard-api'] })
     } catch (caught) {
       setStatus(null)
       setError(friendlyError(caught))
@@ -134,9 +142,12 @@ export function BadgeTab({ active }: { active: boolean }) {
 
   return (
     <div className="space-y-4">
-      <section className="glass rounded-2xl p-4">
-        <h1 className="text-xl font-semibold text-white">Badge & ranks</h1>
-        <p className="mt-1 text-sm text-mist">Look up any Agent ID, or open the one on the connected wallet.</p>
+      <section className="glass rounded-2xl p-5">
+        <h1 className="text-xl font-semibold text-white">Agent Reputation Passport &amp; Ranks</h1>
+        <p className="mt-1 text-sm text-mist">
+          Look up any verified `.ai` Agent ID to inspect its live on-chain Dynamic SVG Reputation Passport (raw wallet
+          addresses are never shown).
+        </p>
         <form onSubmit={onSearch} className="mt-4 flex flex-col gap-3 sm:flex-row">
           <label className="sr-only" htmlFor="badge-handle">
             Agent ID
@@ -148,7 +159,7 @@ export function BadgeTab({ active }: { active: boolean }) {
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={false}
-            placeholder="name.ai"
+            placeholder="alice.ai"
             maxLength={80}
             onChange={(event) => setInput(event.target.value)}
           />
@@ -157,10 +168,12 @@ export function BadgeTab({ active }: { active: boolean }) {
           </button>
         </form>
         <button type="button" className="btn-ghost mt-3" onClick={useMine}>
-          My Agent ID
+          Load My Agent ID
         </button>
-        {agentQuery.isFetching ? <p className="mt-3 text-sm text-mist">Looking up Agent ID…</p> : null}
-        {agentQuery.isError ? <p className="mt-3 text-sm text-[#FFD0D0]">Could not reach the registry. Try again.</p> : null}
+        {agentQuery.isFetching ? <p className="mt-3 text-sm text-mist">Reading live on-chain passport…</p> : null}
+        {agentQuery.isError ? (
+          <p className="mt-3 text-sm text-[#FFD0D0]">Could not reach the registry. Try again.</p>
+        ) : null}
         {agentQuery.data && !agentQuery.data.verified && lookupKey ? (
           <p className="mt-3 text-sm text-white">No verified Agent ID for that handle.</p>
         ) : null}
@@ -172,46 +185,81 @@ export function BadgeTab({ active }: { active: boolean }) {
         <BadgeCard
           profile={profile}
           canClaim={canClaim}
-          claimPending={status === 'Confirm the badge claim in your wallet.' || status === 'Confirm the network switch in your wallet.'}
+          claimPending={
+            status === 'Confirm the soulbound passport claim in your wallet.' ||
+            status === 'Confirm the network switch in your wallet.'
+          }
           onClaim={onClaim}
           tweet={tweet}
           mineProfile={mineProfile}
         />
       ) : null}
 
-      <section className="space-y-3">
-        <BawPanel steps={agentJarAddress ? claimSteps() : null} blocked={!agentJarAddress} />
+      <section>
+        <BawPanel steps={claimSteps()} label="Claim Soulbound Passport with Agentic Wallet" />
       </section>
 
-      <section className="glass rounded-2xl p-4">
-        <div className="flex items-center justify-between gap-3">
+      <section className="glass rounded-2xl p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-lg font-semibold text-white">Leaderboard</h2>
-            <p className="text-sm text-dim">Ranked by unique supporters.</p>
+            <h2 className="text-lg font-semibold text-white">Persistent On-Chain Leaderboard</h2>
+            <p className="text-xs text-dim">
+              Powered directly by AgentJar v2 <code className="font-mono text-mist">getActiveAgents()</code> via
+              multi-RPC — zero 24,000-block log wipeout.
+            </p>
           </div>
-          <button type="button" className="btn-inline" onClick={() => boardQuery.refetch()} disabled={!agentJarAddress}>
+          <button type="button" className="btn-inline" onClick={() => boardQuery.refetch()}>
             Refresh
           </button>
         </div>
-        {!agentJarAddress ? <p className="mt-3 text-sm text-mist">Ranks appear after the contract address is configured.</p> : null}
-        {boardQuery.isFetching ? <p className="mt-3 text-sm text-mist">Loading ranks…</p> : null}
-        {boardQuery.data?.unavailable ? <p className="mt-3 text-sm text-[#FFD0D0]">Ranks are unavailable right now.</p> : null}
-        {boardQuery.data && !boardQuery.data.unavailable && boardQuery.data.leaders.length === 0 ? (
-          <p className="mt-3 text-sm text-mist">No rankings yet. Tips will rank Agent IDs by unique supporters.</p>
+
+        {boardQuery.isFetching ? <p className="mt-3 text-sm text-mist">Loading live BSC Mainnet rankings…</p> : null}
+        {boardQuery.isError ? (
+          <p className="mt-3 text-sm text-[#FFD0D0]">Leaderboard API is temporarily unavailable.</p>
         ) : null}
-        <ol className="mt-3 space-y-2">
-          {boardQuery.data?.leaders.map((row, index) => (
-            <li key={row.handle} className="flex items-center gap-3 rounded-2xl border border-white/10 bg-ink/50 px-3 py-3">
-              <Rank n={index + 1} />
-              <span className="min-w-0 flex-1 truncate font-medium text-white">{displayHandle(row.handle)}</span>
-              <span className="text-right text-sm text-mist">
-                {countLabel(row.supporters, 'supporter')}
-                <span className="block">{countLabel(row.tips, 'tip')}</span>
-              </span>
+        {boardQuery.data && boardQuery.data.leaders.length === 0 ? (
+          <p className="mt-3 text-sm text-mist">
+            No active agents recorded on AgentJar v2 yet. Verified Agent ID tips, polls, or bounties auto-register
+            agents permanently on-chain.
+          </p>
+        ) : null}
+
+        <ol className="mt-4 space-y-2.5">
+          {boardQuery.data?.leaders.map((row) => (
+            <li
+              key={row.handle}
+              className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/10 bg-ink/60 px-3.5 py-3 transition hover:border-gold/35"
+            >
+              <Rank n={row.rank} />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Link
+                    href={profileUrl(row.handle)}
+                    className="truncate font-semibold text-white no-underline hover:text-gold"
+                  >
+                    {row.displayHandle}
+                  </Link>
+                  <span className="rounded-full border border-gold/35 bg-gold/10 px-2 py-0.5 text-[11px] font-semibold text-gold">
+                    {row.tierName}
+                  </span>
+                  {row.hasBadge ? (
+                    <span className="rounded-full border border-emerald-400/35 bg-emerald-500/10 px-2 py-0.5 text-[11px] text-emerald-300">
+                      Passport
+                    </span>
+                  ) : null}
+                </div>
+                <p className="mt-0.5 text-xs text-dim">
+                  {countLabel(row.bountiesCompleted, 'bounty', 'bounties')} ·{' '}
+                  {countLabel(row.uniqueSupporters, 'supporter')} · {countLabel(row.tipsReceived, 'tip')}
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-base font-bold tabular-nums text-gold">{Number(row.score).toLocaleString('en-US')}</p>
+                <p className="text-[11px] uppercase tracking-wide text-dim">Score</p>
+              </div>
             </li>
           ))}
         </ol>
-        {boardQuery.data?.incomplete ? <p className="mt-3 text-xs text-dim">Ranks use Agent IDs seen in the recent tip window.</p> : null}
       </section>
     </div>
   )
@@ -238,56 +286,73 @@ function BadgeCard({
   const lowScore = Boolean(mineProfile && profile.statsReady && profile.score !== null && profile.score < 1n)
 
   return (
-    <section className={`relative overflow-hidden rounded-3xl border bg-gradient-to-br from-[#2A2416] via-card to-ink p-5 ${style.card}`}>
+    <section
+      className={`relative overflow-hidden rounded-3xl border bg-gradient-to-br from-[#2A2416] via-card to-ink p-5 ${style.card}`}
+    >
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(240,185,11,0.2),transparent_55%)]" />
       <div className="relative space-y-4">
-        <p className="text-sm font-semibold tracking-[0.2em] text-gold">AGENTJAR</p>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs font-semibold tracking-[0.2em] text-gold">AGENTJAR REPUTATION PASSPORT</p>
+          <Link href={profileUrl(profile.handle)} className="btn-inline no-underline">
+            Public Profile ↗
+          </Link>
+        </div>
+
         <h2 className={`text-4xl font-semibold ${style.title}`}>{profile.tierName ?? 'Tier pending'}</h2>
         <p className="text-lg font-medium text-white">{displayHandle(profile.handle)} ✓ Verified Agent ID</p>
+
         {profile.statsReady && profile.uniqueSupporters !== null && profile.tipsReceived !== null ? (
-          <p className="text-white">{supportLine(profile.uniqueSupporters, profile.tipsReceived)}</p>
+          <p className="text-sm text-mist">{supportLine(profile.uniqueSupporters, profile.tipsReceived)}</p>
         ) : null}
-        {score !== null ? <p className="text-3xl font-semibold tabular-nums text-white">{score.toLocaleString('en-US')}</p> : null}
-        {score !== null ? <p className="text-xs tracking-wide text-dim">SCORE</p> : null}
+
+        {score !== null ? (
+          <div>
+            <p className="text-3xl font-semibold tabular-nums text-white">{score.toLocaleString('en-US')}</p>
+            <p className="text-xs tracking-wide text-dim">ON-CHAIN REPUTATION SCORE</p>
+          </div>
+        ) : null}
+
         {progress ? (
           <div>
             <div className="h-2 overflow-hidden rounded-full bg-white/10">
               <div className="h-full rounded-full bg-gold" style={{ width: `${progress.percent}%` }} />
             </div>
-            <p className="mt-2 text-sm text-mist">{progress.label}</p>
+            <p className="mt-2 text-xs text-mist">{progress.label}</p>
           </div>
-        ) : (
-          <p className="text-sm text-mist">
-            {profile.configured ? 'Score is unavailable right now.' : 'Score appears after the contract address is configured.'}
-          </p>
-        )}
+        ) : null}
+
         {profile.statsReady ? <StatsGrid profile={profile} /> : null}
+
         {profile.minted && profile.imageSrc ? (
           <figure>
             <img
               src={profile.imageSrc}
-              alt={`${profile.tierName ?? 'AgentJar'} badge for ${displayHandle(profile.handle)}`}
-              className="mx-auto w-full max-w-xs rounded-2xl border border-gold/30"
+              alt={`${profile.tierName ?? 'AgentJar'} passport for ${displayHandle(profile.handle)}`}
+              className="mx-auto w-full max-w-xs rounded-2xl border border-gold/35 shadow-lg"
             />
-            <figcaption className="mt-2 text-center text-sm text-mist">Live on-chain badge</figcaption>
+            <figcaption className="mt-2 text-center text-xs text-mist">
+              Live on-chain Dynamic SVG rendered directly from <code className="font-mono">tokenURI()</code>
+            </figcaption>
           </figure>
         ) : null}
+
         {profile.minted && !profile.imageSrc ? (
-          <p className="text-sm text-mist">The badge is minted. The image preview is unavailable right now.</p>
+          <p className="text-sm text-mist">Passport minted on-chain. SVG preview is temporarily unavailable.</p>
         ) : null}
-        {lowScore ? <p className="text-sm text-mist">Score must be at least 1 to claim a badge.</p> : null}
+        {lowScore ? <p className="text-sm text-mist">Earn at least 1 reputation point to claim your soulbound passport.</p> : null}
         {!mineProfile && profile.statsReady && !profile.minted && profile.score !== null && profile.score >= 1n ? (
-          <p className="text-sm text-mist">Claim is available from the wallet that holds this Agent ID.</p>
+          <p className="text-xs text-mist">Passport claim is available from the wallet holding this Agent ID.</p>
         ) : null}
+
         <div className="flex flex-col gap-3 sm:flex-row">
           {canClaim ? (
             <button type="button" className="btn sm:flex-1" onClick={onClaim} disabled={claimPending}>
-              {claimPending ? 'Waiting for wallet…' : 'Claim Badge'}
+              {claimPending ? 'Waiting for wallet…' : 'Claim Soulbound Passport'}
             </button>
           ) : null}
           {tweet && profile.tierName ? (
-            <a className="btn-ghost sm:flex-1" href={tweet} target="_blank" rel="noopener noreferrer">
-              Share badge on X
+            <a className="btn-ghost sm:flex-1 no-underline" href={tweet} target="_blank" rel="noopener noreferrer">
+              Share Passport on X
             </a>
           ) : null}
         </div>
@@ -298,15 +363,15 @@ function BadgeCard({
 
 function StatsGrid({ profile }: { profile: AgentProfile }) {
   const cells = [
-    ['Unique supporters', countLabel(profile.uniqueSupporters ?? 0, 'supporter')],
-    ['Tips received', countLabel(profile.tipsReceived ?? 0, 'tip')],
-    ['Agent IDs tipped', countLabel(profile.agentIdsTipped ?? 0, 'Agent ID', 'Agent IDs')],
-    ['BNB received', formatUnitsTrim(profile.bnbReceived ?? 0n)],
-    ['USD received', formatUnitsTrim(profile.usdReceived ?? 0n)],
+    ['Bounties completed', countLabel(profile.bountiesCompleted ?? 0, 'bounty', 'bounties')],
+    ['Verified supporters', countLabel(profile.uniqueSupporters ?? 0, 'supporter')],
+    ['Verified tips', countLabel(profile.tipsReceived ?? 0, 'tip')],
+    ['Qualified polls', countLabel(profile.qualifiedPolls ?? 0, 'poll')],
+    ['BNB received', `${formatUnitsTrim(profile.bnbReceived ?? 0n)} BNB`],
+    ['USD received', `$${formatUnitsTrim(profile.usdReceived ?? 0n)}`],
     ['Poll votes', countLabel(profile.pollVotes ?? 0, 'vote')],
-    ['Day streak', countLabel(profile.currentStreak ?? 0, 'day')],
+    ['Current streak', countLabel(profile.currentStreak ?? 0, 'day')],
     ['Best streak', countLabel(profile.bestStreak ?? 0, 'day')],
-    ['Polls created', countLabel(profile.pollsCreated ?? 0, 'poll')],
   ]
   return (
     <dl className="grid grid-cols-2 gap-2 sm:grid-cols-3">
@@ -329,5 +394,9 @@ function Rank({ n }: { n: number }) {
         : n === 3
           ? 'bg-[#C9843F] text-ink'
           : 'border border-white/30 bg-transparent text-white'
-  return <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-bold ${tone}`}>{n}</span>
+  return (
+    <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-bold ${tone}`}>
+      {n}
+    </span>
+  )
 }

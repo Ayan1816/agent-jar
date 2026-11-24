@@ -3,8 +3,8 @@
 import { useEffect, useState } from 'react'
 import { useAccount, useReadContract } from 'wagmi'
 import { agentJarAbi, registryAbi } from '@/lib/abi'
-import { agentJarAddress, CHAIN_ID, REGISTRY } from '@/lib/config'
-import { parseSender, type SenderView } from '@/lib/parse'
+import { AGENTJAR_ADDRESS, CHAIN_ID, REGISTRY } from '@/lib/config'
+import { asBigint, parseSender, type SenderView } from '@/lib/parse'
 
 const PLACEHOLDER = '0x0000000000000000000000000000000000000001' as const
 
@@ -62,11 +62,11 @@ export function useMySenderStats(enabled: boolean): SenderView | null {
   const { address, isConnected } = useAccount()
   const read = useReadContract({
     chainId: CHAIN_ID,
-    address: agentJarAddress ?? PLACEHOLDER,
+    address: AGENTJAR_ADDRESS,
     abi: agentJarAbi,
     functionName: 'senderStats',
     args: [address ?? PLACEHOLDER],
-    query: { enabled: Boolean(enabled && address && isConnected && agentJarAddress) },
+    query: { enabled: Boolean(enabled && address && isConnected) },
   })
   if (!read.data) return null
   try {
@@ -74,4 +74,43 @@ export function useMySenderStats(enabled: boolean): SenderView | null {
   } catch {
     return null
   }
+}
+
+export function useMyScore(enabled: boolean): bigint {
+  const { address, isConnected } = useAccount()
+  const read = useReadContract({
+    chainId: CHAIN_ID,
+    address: AGENTJAR_ADDRESS,
+    abi: agentJarAbi,
+    functionName: 'getScore',
+    args: [address ?? PLACEHOLDER],
+    query: { enabled: Boolean(enabled && address && isConnected) },
+  })
+  if (!read.data) return 0n
+  try {
+    return asBigint(read.data)
+  } catch {
+    return 0n
+  }
+}
+
+export function useMyPendingBNB(enabled: boolean): { amount: bigint; refetch: () => Promise<unknown> } {
+  const { address, isConnected } = useAccount()
+  const read = useReadContract({
+    chainId: CHAIN_ID,
+    address: AGENTJAR_ADDRESS,
+    abi: agentJarAbi,
+    functionName: 'pendingWithdrawals',
+    args: [address ?? PLACEHOLDER],
+    query: { enabled: Boolean(enabled && address && isConnected) },
+  })
+  let amount = 0n
+  if (read.data !== undefined) {
+    try {
+      amount = asBigint(read.data)
+    } catch {
+      amount = 0n
+    }
+  }
+  return { amount, refetch: read.refetch }
 }

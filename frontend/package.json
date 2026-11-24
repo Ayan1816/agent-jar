@@ -1,11 +1,11 @@
 {
   "name": "agentjar",
   "private": true,
-  "version": "0.1.0",
+  "version": "2.0.0",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "postbuild": "node scripts/spa-fallback.mjs"
+    "start": "next start"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.66.0",
